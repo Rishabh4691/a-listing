@@ -1,18 +1,10 @@
 import axios from 'axios'
 import { logUsage } from './costLogger.js'
 
-// Together AI — FLUX.1-schnell, OpenAI-compatible image generations endpoint
-// $0.003/image for the paid model; FLUX.1-schnell-Free is free but no custom dimensions
-const TOGETHER_BASE = 'https://api.together.xyz/v1'
-const PAID_MODEL    = 'black-forest-labs/FLUX.1-schnell'
-const FREE_MODEL    = 'black-forest-labs/FLUX.1-schnell-Free'
+// Pollinations AI — completely free, no API key, no signup required
+// Uses FLUX under the hood, returns JPEG directly
+const POLLINATIONS_BASE = 'https://image.pollinations.ai/prompt'
 
-// FLUX requires dimensions that are multiples of 32, between 256–2048
-function snapTo32(n, min = 256, max = 1024) {
-  return Math.min(max, Math.max(min, Math.round(n / 32) * 32))
-}
-
-// Scene/mood descriptors per module
 const SCENE_PROMPTS = {
   header:       'wide lifestyle banner scene, product prominently displayed, aspirational setting, soft studio lighting',
   banner:       'wide panoramic product scene, product shown in context of use, professional photography, banner format',
@@ -46,55 +38,58 @@ function buildPrompt(moduleSpec, productAnalysis, copyData) {
     headline && `visual theme: "${headline}"`,
     scene,
     `for ${productAnalysis.targetAudience || 'consumers'}`,
-    'photorealistic, high resolution, commercial quality, sRGB, no text overlays',
+    'photorealistic, high resolution, commercial quality, no text overlays, no watermarks',
   ].filter(Boolean).join('. ')
 }
 
-const NEGATIVE_PROMPT = 'low quality, blurry, distorted, watermark, text, price tag, sale sign, cartoon, anime, ugly, deformed'
+// Clamp dimensions to what Pollinations supports well (max 2048)
+function clampDim(n) {
+  return Math.min(2048, Math.max(128, Math.round(n)))
+}
 
 export async function generateImage({ moduleSpec, productAnalysis, copyData }) {
-  const togetherKey = process.env.TOGETHER_API_KEY
-  if (!togetherKey) {
-    throw new Error(
-      'TOGETHER_API_KEY is not set. Get a free key at https://api.together.ai — ' +
-      'add it to backend/.env as TOGETHER_API_KEY=your_key_here'
-    )
-  }
-
   const prompt = buildPrompt(moduleSpec, productAnalysis, copyData)
-  console.log(`  [ImageGen] ${moduleSpec.id}: "${prompt.substring(0, 90)}..."`)
+  const width  = clampDim(moduleSpec.width)
+  const height = clampDim(moduleSpec.height)
 
-  // Snap dimensions to FLUX-compatible multiples of 32, max 1024
-  const width  = snapTo32(moduleSpec.width)
-  const height = snapTo32(moduleSpec.height)
+  console.log(`  [ImageGen] ${moduleSpec.id} ${width}×${height}: "${prompt.substring(0, 80)}..."`)
 
-  const response = await axios.post(
-    `${TOGETHER_BASE}/images/generations`,
-    {
-      model: PAID_MODEL,
-      prompt,
-      negative_prompt: NEGATIVE_PROMPT,
-      n: 1,
-      steps: 4,
-      width,
-      height,
-      response_format: 'b64_json',
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${togetherKey}`,
-        'Content-Type': 'application/json',
-      },
-      timeout: 90000,
+  const url = `${POLLINATIONS_BASE}/${encodeURIComponent(prompt)}`
+  const params = { width, height, model: 'flux', nologo: 'true', enhance: 'false' }
+
+  let lastErr
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const response = await axios.get(url, {
+        params,
+        responseType: 'arraybuffer',
+        timeout: 90000,
+        headers: { 'User-Agent': 'a-listing/1.0' },
+      })
+
+      const contentType = response.headers['content-type'] || ''
+      if (!contentType.startsWith('image/')) {
+        const text = Buffer.from(response.data).toString('utf8')
+        throw new Error(`Pollinations returned non-image (${contentType}): ${text.substring(0, 200)}`)
+      }
+
+      const b64 = Buffer.from(response.data).toString('base64')
+      const mime = contentType.split(';')[0].trim()
+
+      logUsage({ model: 'pollinations/flux', imagesGenerated: 1, mode: `image_${moduleSpec.id}`, success: true })
+
+      return `data:${mime};base64,${b64}`
+    } catch (err) {
+      lastErr = err
+      const status = err.response?.status
+      if (status === 429 || status === 503 || !status) {
+        const wait = attempt * 8000
+        console.warn(`  [ImageGen] Attempt ${attempt} failed (${status || err.code}), retrying in ${wait/1000}s...`)
+        await new Promise(r => setTimeout(r, wait))
+        continue
+      }
+      throw err
     }
-  )
-
-  const b64 = response.data?.data?.[0]?.b64_json
-  if (!b64) {
-    throw new Error(`Together AI returned no image. Response: ${JSON.stringify(response.data).substring(0, 300)}`)
   }
-
-  logUsage({ model: PAID_MODEL, imagesGenerated: 1, mode: `image_${moduleSpec.id}`, success: true })
-
-  return `data:image/jpeg;base64,${b64}`
+  throw lastErr
 }

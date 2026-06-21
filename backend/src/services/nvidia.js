@@ -285,7 +285,6 @@ export async function testConnection() {
     textModel: reply,
     visionModel: VISION_MODEL,
     copyModel: COPY_MODEL,
-    imageProvider: 'Together AI (FLUX.1-schnell)',
-    togetherKeyLoaded: !!process.env.TOGETHER_API_KEY,
+    imageProvider: 'Pollinations AI / FLUX (free, no key)',
   }
 }
