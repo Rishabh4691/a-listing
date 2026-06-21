@@ -2,8 +2,8 @@ import axios from 'axios'
 import { logUsage } from './costLogger.js'
 
 const BASE_URL = 'https://integrate.api.nvidia.com/v1'
-const VISION_MODEL = 'qwen/qwen3.5-397b-a17b'
-const IMAGE_EDIT_MODEL = 'qwen/qwen-image-edit'
+const VISION_MODEL = 'meta/llama-3.2-11b-vision-instruct'  // confirmed vision model on NVIDIA NIM
+const COPY_MODEL   = 'qwen/qwen3.5-397b-a17b'              // large text model for copywriting
 
 // Injected into every copywriting call — violations cause Amazon rejection
 const COMPLIANCE_RULES = `
@@ -81,12 +81,13 @@ Analyze this product image and return ONLY valid JSON (no markdown, no explanati
     success: true,
   })
 
-  const content = response.data.choices[0].message.content
+  const content = response.data.choices?.[0]?.message?.content
   try {
+    if (!content) throw new Error('Empty vision response')
     const jsonMatch = content.match(/\{[\s\S]*\}/)
     return JSON.parse(jsonMatch ? jsonMatch[0] : content)
   } catch {
-    console.warn('Vision response was not clean JSON, returning raw')
+    console.warn('Vision response was not clean JSON, returning raw:', content?.substring(0, 200))
     return { raw: content, category: 'product', materials: [], visibleFeatures: [], useCases: [], style: 'modern', colors: [], targetAudience: 'consumers', visibleText: '' }
   }
 }
@@ -126,7 +127,7 @@ ${moduleFields}
   const response = await axios.post(
     `${BASE_URL}/chat/completions`,
     {
-      model: VISION_MODEL,
+      model: COPY_MODEL,
       messages: [{ role: 'user', content: prompt }],
       max_tokens: 2048,
       temperature: 0.7,
@@ -139,19 +140,20 @@ ${moduleFields}
 
   const usage = response.data.usage || {}
   logUsage({
-    model: VISION_MODEL,
+    model: COPY_MODEL,
     inputTokens: usage.prompt_tokens || 0,
     outputTokens: usage.completion_tokens || 0,
     mode: `copywriting_${mode}`,
     success: true,
   })
 
-  const content = response.data.choices[0].message.content
+  const content = response.data.choices?.[0]?.message?.content
   try {
+    if (!content) throw new Error('Empty response from model')
     const jsonMatch = content.match(/\{[\s\S]*\}/)
     return JSON.parse(jsonMatch ? jsonMatch[0] : content)
   } catch {
-    console.warn('Copy response was not clean JSON:', content.substring(0, 300))
+    console.warn('Copy response was not clean JSON:', content?.substring(0, 300))
     // Return empty copy shells so the rest of the pipeline continues
     const fallback = {}
     for (const m of moduleSpecs.modules) {
@@ -261,15 +263,14 @@ export async function generateModuleImage({ imageBase64, mimeType = 'image/jpeg'
   )
 }
 
-// Validates both API keys with minimal calls
+// Smoke-test both NVIDIA keys and the HF image key
 export async function testConnection() {
   const textKey = getApiKey()
-  const imageKey = getImageApiKey()
 
   const response = await axios.post(
     `${BASE_URL}/chat/completions`,
     {
-      model: VISION_MODEL,
+      model: COPY_MODEL,
       messages: [{ role: 'user', content: 'Reply with the single word: ready' }],
       max_tokens: 10,
     },
@@ -280,8 +281,11 @@ export async function testConnection() {
   )
   const reply = response.data.choices[0].message.content.trim()
 
-  // Verify the image key is at least syntactically present and non-empty
-  if (!imageKey.startsWith('nvapi-')) throw new Error('NVIDIA_IMAGE_API_KEY looks malformed')
-
-  return { textModel: reply, imageKeyLoaded: true }
+  return {
+    textModel: reply,
+    visionModel: VISION_MODEL,
+    copyModel: COPY_MODEL,
+    imageProvider: 'Together AI (FLUX.1-schnell)',
+    togetherKeyLoaded: !!process.env.TOGETHER_API_KEY,
+  }
 }

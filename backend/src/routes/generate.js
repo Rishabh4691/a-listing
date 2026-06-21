@@ -2,7 +2,8 @@ import express from 'express'
 import multer from 'multer'
 import archiver from 'archiver'
 import { MODULE_SPECS } from '../config/modules.js'
-import { analyzeProduct, generateModuleCopy, generateModuleImage, testConnection } from '../services/nvidia.js'
+import { analyzeProduct, generateModuleCopy, testConnection } from '../services/nvidia.js'
+import { generateImage } from '../services/imageGen.js'
 import { resizeToSpec } from '../services/imageProcessor.js'
 import { checkAllModuleCopy } from '../services/compliance.js'
 import { extractKeywords } from '../services/keywords.js'
@@ -82,9 +83,7 @@ router.post('/generate', upload.single('productImage'), async (req, res) => {
     for (const moduleSpec of specs.modules) {
       console.log(`  ${moduleSpec.id} (${moduleSpec.width}×${moduleSpec.height})`)
       try {
-        const rawImageData = await generateModuleImage({
-          imageBase64,
-          mimeType,
+        const rawImageData = await generateImage({
           moduleSpec,
           productAnalysis,
           copyData: moduleCopy[moduleSpec.id],
