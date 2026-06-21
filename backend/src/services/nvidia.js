@@ -25,6 +25,12 @@ function getApiKey() {
   return key
 }
 
+function getImageApiKey() {
+  const key = process.env.NVIDIA_IMAGE_API_KEY
+  if (!key) throw new Error('NVIDIA_IMAGE_API_KEY is not set. Add it to backend/.env and restart the server.')
+  return key
+}
+
 export async function analyzeProduct(imageBase64, mimeType = 'image/jpeg') {
   const apiKey = getApiKey()
 
@@ -172,7 +178,7 @@ const SCENE_INSTRUCTIONS = {
 }
 
 export async function generateModuleImage({ imageBase64, mimeType = 'image/jpeg', moduleSpec, productAnalysis }) {
-  const apiKey = getApiKey()
+  const apiKey = getImageApiKey()
 
   const sceneBase = SCENE_INSTRUCTIONS[moduleSpec.id] || 'Place this product in a professional clean studio setting. Product completely unchanged.'
   const instruction = `${sceneBase} Style: ${productAnalysis.style || 'modern and clean'}. Target audience: ${productAnalysis.targetAudience || 'general consumers'}.`
@@ -255,9 +261,11 @@ export async function generateModuleImage({ imageBase64, mimeType = 'image/jpeg'
   )
 }
 
-// Validates the API key with a minimal chat call — call before a full generation run
+// Validates both API keys with minimal calls
 export async function testConnection() {
-  const apiKey = getApiKey()
+  const textKey = getApiKey()
+  const imageKey = getImageApiKey()
+
   const response = await axios.post(
     `${BASE_URL}/chat/completions`,
     {
@@ -266,9 +274,14 @@ export async function testConnection() {
       max_tokens: 10,
     },
     {
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${textKey}`, 'Content-Type': 'application/json' },
       timeout: 15000,
     }
   )
-  return response.data.choices[0].message.content.trim()
+  const reply = response.data.choices[0].message.content.trim()
+
+  // Verify the image key is at least syntactically present and non-empty
+  if (!imageKey.startsWith('nvapi-')) throw new Error('NVIDIA_IMAGE_API_KEY looks malformed')
+
+  return { textModel: reply, imageKeyLoaded: true }
 }

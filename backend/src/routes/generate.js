@@ -127,8 +127,8 @@ router.post('/generate', upload.single('productImage'), async (req, res) => {
 // GET /api/test-connection — quick smoke-test for the NVIDIA API key
 router.get('/test-connection', async (_req, res) => {
   try {
-    const reply = await testConnection()
-    res.json({ ok: true, modelReply: reply })
+    const result = await testConnection()
+    res.json({ ok: true, ...result })
   } catch (err) {
     const status = err.response?.status
     const detail = err.response?.data?.detail || err.response?.data?.message || err.message
