@@ -76,31 +76,28 @@ router.post('/generate', upload.single('productImage'), async (req, res) => {
       console.warn('[Generate] Compliance flags detected — flagging for manual review')
     }
 
-    // 5 — Image generation + resize for each module
-    console.log('[Generate] Step 4: Generating and resizing module images...')
-    const moduleImages = {}
-
-    for (const moduleSpec of specs.modules) {
-      console.log(`  ${moduleSpec.id} (${moduleSpec.width}×${moduleSpec.height})`)
-      try {
-        const rawImageData = await generateImage({
-          moduleSpec,
-          productAnalysis,
-          copyData: moduleCopy[moduleSpec.id],
-        })
-        const resized = await resizeToSpec(rawImageData, moduleSpec.width, moduleSpec.height, specs.maxFileSizeBytes)
-        moduleImages[moduleSpec.id] = {
-          base64: resized.base64,
-          mimeType: resized.mimeType,
-          width: resized.width,
-          height: resized.height,
-          sizeBytes: resized.sizeBytes,
+    // 5 — Image generation in parallel, then resize
+    console.log(`[Generate] Step 4: Generating ${specs.modules.length} images in parallel...`)
+    const imageResults = await Promise.all(
+      specs.modules.map(async moduleSpec => {
+        try {
+          const rawImageData = await generateImage({
+            moduleSpec,
+            productAnalysis,
+            imageBase64,
+            mimeType,
+            copyData: moduleCopy[moduleSpec.id],
+          })
+          const resized = await resizeToSpec(rawImageData, moduleSpec.width, moduleSpec.height, specs.maxFileSizeBytes)
+          console.log(`  ✓ ${moduleSpec.id} (${resized.sizeBytes} bytes)`)
+          return [moduleSpec.id, { base64: resized.base64, mimeType: resized.mimeType, width: resized.width, height: resized.height, sizeBytes: resized.sizeBytes }]
+        } catch (imgErr) {
+          console.error(`  ✗ ${moduleSpec.id}:`, imgErr.message)
+          return [moduleSpec.id, { error: imgErr.message }]
         }
-      } catch (imgErr) {
-        console.error(`  Failed ${moduleSpec.id}:`, imgErr.message)
-        moduleImages[moduleSpec.id] = { error: imgErr.message }
-      }
-    }
+      })
+    )
+    const moduleImages = Object.fromEntries(imageResults)
 
     console.log('[Generate] Done.')
 
