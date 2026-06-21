@@ -2,7 +2,7 @@ import express from 'express'
 import multer from 'multer'
 import archiver from 'archiver'
 import { MODULE_SPECS } from '../config/modules.js'
-import { analyzeProduct, generateModuleCopy, generateModuleImage } from '../services/nvidia.js'
+import { analyzeProduct, generateModuleCopy, generateModuleImage, testConnection } from '../services/nvidia.js'
 import { resizeToSpec } from '../services/imageProcessor.js'
 import { checkAllModuleCopy } from '../services/compliance.js'
 import { extractKeywords } from '../services/keywords.js'
@@ -121,6 +121,18 @@ router.post('/generate', upload.single('productImage'), async (req, res) => {
   } catch (err) {
     console.error('[Generate] Error:', err.message)
     res.status(500).json({ error: err.message || 'Generation failed' })
+  }
+})
+
+// GET /api/test-connection — quick smoke-test for the NVIDIA API key
+router.get('/test-connection', async (_req, res) => {
+  try {
+    const reply = await testConnection()
+    res.json({ ok: true, modelReply: reply })
+  } catch (err) {
+    const status = err.response?.status
+    const detail = err.response?.data?.detail || err.response?.data?.message || err.message
+    res.status(status || 500).json({ ok: false, error: detail })
   }
 })
 

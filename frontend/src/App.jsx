@@ -9,6 +9,21 @@ export default function App() {
   const [generating, setGenerating] = useState(false)
   const [results, setResults] = useState(null)
   const [error, setError] = useState(null)
+  const [connStatus, setConnStatus] = useState(null) // null | 'ok' | 'error'
+
+  async function handleTestConnection() {
+    setConnStatus(null)
+    try {
+      const res = await fetch('/api/test-connection')
+      const data = await res.json()
+      setConnStatus(data.ok ? 'ok' : 'error')
+      if (!data.ok) setError('API key test failed: ' + data.error)
+      else setError(null)
+    } catch (err) {
+      setConnStatus('error')
+      setError('Connection test failed: ' + err.message)
+    }
+  }
 
   async function handleGenerate({ image, keywords, productName, brandName, brandMission }) {
     setGenerating(true)
@@ -113,8 +128,10 @@ export default function App() {
       </main>
 
       <footer className="app-footer">
-        <a href="/api/usage" target="_blank" rel="noreferrer">API Usage &amp; Cost Log</a>
-        <span>Standard A+ · Premium A+ · Brand Story</span>
+        <button className="footer-test-btn" onClick={handleTestConnection}>
+          {connStatus === 'ok' ? '✓ API Connected' : connStatus === 'error' ? '✗ API Error' : 'Test API Connection'}
+        </button>
+        <a href="/api/usage" target="_blank" rel="noreferrer">Usage &amp; Cost Log</a>
       </footer>
     </div>
   )

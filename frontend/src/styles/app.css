@@ -308,6 +308,19 @@ body {
 .app-footer a { color: #5b5bf6; text-decoration: none; }
 .app-footer a:hover { text-decoration: underline; }
 
+.footer-test-btn {
+  background: none;
+  border: 1px solid #3a3a3c;
+  color: #ababab;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s, color 0.15s;
+}
+.footer-test-btn:hover { border-color: #5b5bf6; color: #5b5bf6; }
+
 /* ── Responsive ── */
 @media (max-width: 680px) {
   .mode-selector { grid-template-columns: 1fr; }

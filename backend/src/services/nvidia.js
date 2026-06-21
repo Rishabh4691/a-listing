@@ -175,10 +175,40 @@ export async function generateModuleImage({ imageBase64, mimeType = 'image/jpeg'
   const apiKey = getApiKey()
 
   const sceneBase = SCENE_INSTRUCTIONS[moduleSpec.id] || 'Place this product in a professional clean studio setting. Product completely unchanged.'
-  const instruction = `${sceneBase} Style: ${productAnalysis.style || 'modern and clean'}. Target: ${productAnalysis.targetAudience || 'general consumers'}.`
+  const instruction = `${sceneBase} Style: ${productAnalysis.style || 'modern and clean'}. Target audience: ${productAnalysis.targetAudience || 'general consumers'}.`
 
-  // qwen-image-edit is a multimodal editing model — pass the product photo + edit instruction
-  // It conditions generation on the real product image so the product stays recognizable
+  const imageBuffer = Buffer.from(imageBase64, 'base64')
+
+  // Attempt 1 — OpenAI-compatible /v1/images/edits (multipart form)
+  // qwen-image-edit conditions on the real product photo so the product stays recognizable
+  try {
+    const ext = mimeType.split('/')[1] || 'jpeg'
+    const form = new FormData()
+    form.append('model', IMAGE_EDIT_MODEL)
+    form.append('prompt', instruction)
+    form.append('n', '1')
+    form.append('response_format', 'b64_json')
+    form.append('image', new Blob([imageBuffer], { type: mimeType }), `product.${ext}`)
+
+    const response = await axios.post(`${BASE_URL}/images/edits`, form, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      timeout: 120000,
+    })
+
+    logUsage({ model: IMAGE_EDIT_MODEL, imagesGenerated: 1, mode: `image_${moduleSpec.id}`, success: true })
+
+    const item = response.data?.data?.[0]
+    if (item?.b64_json) return `data:image/jpeg;base64,${item.b64_json}`
+    if (item?.url) {
+      const dl = await axios.get(item.url, { responseType: 'arraybuffer', timeout: 30000 })
+      return `data:image/jpeg;base64,${Buffer.from(dl.data).toString('base64')}`
+    }
+  } catch (editErr) {
+    console.warn(`[nvidia] images/edits failed for ${moduleSpec.id} — trying chat/completions fallback:`, editErr.response?.data?.detail || editErr.message)
+  }
+
+  // Attempt 2 — multimodal chat/completions fallback
+  // Some NVIDIA NIM image-edit models embed the output image in the chat response
   const response = await axios.post(
     `${BASE_URL}/chat/completions`,
     {
@@ -187,15 +217,12 @@ export async function generateModuleImage({ imageBase64, mimeType = 'image/jpeg'
         {
           role: 'user',
           content: [
-            {
-              type: 'image_url',
-              image_url: { url: `data:${mimeType};base64,${imageBase64}` },
-            },
+            { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } },
             { type: 'text', text: instruction },
           ],
         },
       ],
-      max_tokens: 1,
+      max_tokens: 4096,
     },
     {
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -203,30 +230,45 @@ export async function generateModuleImage({ imageBase64, mimeType = 'image/jpeg'
     }
   )
 
-  logUsage({
-    model: IMAGE_EDIT_MODEL,
-    imagesGenerated: 1,
-    mode: `image_${moduleSpec.id}`,
-    success: true,
-  })
+  logUsage({ model: IMAGE_EDIT_MODEL, imagesGenerated: 1, mode: `image_${moduleSpec.id}`, success: true })
 
   const content = response.data.choices[0].message.content
 
-  // Handle base64 data URI embedded in response
+  // data URI embedded directly in response text
   const dataUriMatch = content.match(/(data:image\/[a-zA-Z+]+;base64,[A-Za-z0-9+/=]+)/)
   if (dataUriMatch) return dataUriMatch[1]
 
-  // Handle Markdown image with data URI
+  // Markdown image with data URI  ![alt](data:...)
   const mdDataMatch = content.match(/!\[.*?\]\((data:image\/[^)]+)\)/)
   if (mdDataMatch) return mdDataMatch[1]
 
-  // Handle plain image URL — download and convert to base64 data URI
+  // Plain HTTPS image URL — download and re-encode
   const urlMatch = content.match(/https?:\/\/\S+\.(jpg|jpeg|png|webp)/i)
   if (urlMatch) {
-    const imgResponse = await axios.get(urlMatch[0], { responseType: 'arraybuffer', timeout: 30000 })
-    const b64 = Buffer.from(imgResponse.data).toString('base64')
-    return `data:image/jpeg;base64,${b64}`
+    const dl = await axios.get(urlMatch[0], { responseType: 'arraybuffer', timeout: 30000 })
+    return `data:image/jpeg;base64,${Buffer.from(dl.data).toString('base64')}`
   }
 
-  throw new Error(`qwen-image-edit returned unexpected format. First 300 chars: ${content.substring(0, 300)}`)
+  throw new Error(
+    `qwen-image-edit: neither /images/edits nor chat/completions returned a recognisable image.\n` +
+    `Chat response preview (first 500 chars): ${content.substring(0, 500)}`
+  )
+}
+
+// Validates the API key with a minimal chat call — call before a full generation run
+export async function testConnection() {
+  const apiKey = getApiKey()
+  const response = await axios.post(
+    `${BASE_URL}/chat/completions`,
+    {
+      model: VISION_MODEL,
+      messages: [{ role: 'user', content: 'Reply with the single word: ready' }],
+      max_tokens: 10,
+    },
+    {
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      timeout: 15000,
+    }
+  )
+  return response.data.choices[0].message.content.trim()
 }
